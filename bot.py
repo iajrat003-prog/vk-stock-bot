@@ -1,22 +1,19 @@
+import os
 import time
 import logging
 import requests
 import feedparser
 
 # --- НАСТРОЙКИ ---
-import os
-# ... (остальные ваши импорты: time, logging, requests, feedparser)
-
-# --- НАСТРОЙКИ ---
-VK_TOKEN = os.environ.get("VK_TOKEN") # Токен будет браться из настроек GitHub
-VK_GROUP_ID = "243236904"  
-# ... (дальше идет ваш код без изменений)
+# Токен берется из секретов GitHub (Settings -> Secrets and variables -> Actions)
+VK_TOKEN = os.environ.get("VK_TOKEN") 
+VK_GROUP_ID = "243236904"  # ID вашей группы
 
 # ТОЛЬКО российские компании (ищем эти слова)
 KEYWORDS = [
     "Сбер", "Газпром", "Лукойл", "Норникель", "Яндекс", 
     "Тинькофф", "Т-Банк", "ВТБ", "Роснефть", "Мосбиржа", 
-    "Аэрофлот", "Магнит", "Полюс", "Сургутнефтегаз", "Рубль", "ЦБ РФ",
+    "Аэрофлот", "Магнит", "Полюс", "Сургутнефтегаз", "Рубль", "ЦБ РФ"
 ]
 
 # Слова-исключения (если новость содержит эти слова, бот её ПРОПУСТИТ)
@@ -27,8 +24,6 @@ RSS_FEEDS = [
     "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",  
     "https://1prime.ru/export/rss2/index.xml",            
 ]
-
-POLL_INTERVAL_SECONDS = 3600 # Проверка каждые 5 минут
 # -----------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -48,18 +43,13 @@ def analyze_russian_sentiment(text: str) -> float:
 
 def fetch_russian_news():
     recent_news = []
-    
-    # Заголовки, чтобы сайты думали, что мы обычный браузер
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
 
     for feed_url in RSS_FEEDS:
         try:
-            # Скачиваем новости через requests
             response = requests.get(feed_url, headers=headers, timeout=10)
-            
-            # Парсим скачанный текст
             feed = feedparser.parse(response.content)
             
             print(f"[DEBUG] Скачано новостей из {feed_url}: {len(feed.entries)}")
@@ -70,9 +60,6 @@ def fetch_russian_news():
                 link = entry.get('link', '')
                 
                 text_to_check = (title + " " + summary).lower()
-                
-                # Для наглядности выведем первые 5 заголовков, которые мы скачали
-                # print(f"[DEBUG] Проверяем: {title}") 
                 
                 has_keyword = any(kw.lower() in text_to_check for kw in KEYWORDS)
                 has_ignored = any(ig.lower() in text_to_check for ig in IGNORE_WORDS)
@@ -87,7 +74,6 @@ def fetch_russian_news():
         except Exception as e:
             logger.error(f"Ошибка загрузки RSS {feed_url}: {e}")
             
-    # Удаляем дубликаты
     unique_news = {v['title']: v for v in recent_news}.values()
     return list(unique_news)
 
@@ -134,30 +120,30 @@ def post_to_vk_wall(text: str):
         return False
 
 def main():
-    logger.info("Бот запущен. Публикация российских новостей на стену...")
+    logger.info("Бот запущен. Проверка новостей...")
 
-    while True:
-        logger.info("Начинаю проверку новостей...")
-        alerts_sent = 0
+    if not VK_TOKEN:
+        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена в Secrets GitHub!")
+        return
 
-        news_items = fetch_russian_news()
-        logger.info(f"После фильтрации осталось новостей: {len(news_items)}")
+    news_items = fetch_russian_news()
+    logger.info(f"После фильтрации осталось новостей: {len(news_items)}")
 
-        for item in news_items:
-            title = item.get("title", "")
-            score = analyze_russian_sentiment(title + " " + item.get("summary", ""))
-            message = format_message(item, score)
-            
-            if post_to_vk_wall(message):
-                logger.info(f"✅ Опубликовано: {title[:50]}...")
-                alerts_sent += 1
-                time.sleep(2) 
+    alerts_sent = 0
+    for item in news_items:
+        title = item.get("title", "")
+        score = analyze_russian_sentiment(title + " " + item.get("summary", ""))
+        message = format_message(item, score)
+        
+        if post_to_vk_wall(message):
+            logger.info(f"✅ Опубликовано: {title[:50]}...")
+            alerts_sent += 1
+            time.sleep(2) # Пауза, чтобы ВК не заблокировал за спам
 
-        logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
-        time.sleep(POLL_INTERVAL_SECONDS)
+    logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
 
 if __name__ == "__main__":
     try:
         main()
-    except KeyboardInterrupt:
-        logger.info("Программа остановлена.")
+    except Exception as e:
+        logger.error(f"Непредвиденная ошибка: {e}")
