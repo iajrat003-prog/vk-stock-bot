@@ -109,7 +109,7 @@ def main():
 
     if not VK_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена в Secrets GitHub!")
-        sys.exit(1)
+        return
 
     news_items = fetch_russian_news()
     logger.info(f"После фильтрации осталось новостей: {len(news_items)}")
@@ -123,12 +123,13 @@ def main():
         if post_to_vk_wall(message):
             logger.info(f"✅ Опубликовано: {title[:50]}...")
             alerts_sent += 1
-            time.sleep(2)
+            time.sleep(2) # Пауза только между постами
 
     logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
-    logger.info("Скрипт успешно завершил работу.")
+    logger.info("Скрипт успешно завершил работу и выключается.")
     
-    # ЖЕЛЕЗОБЕТОННЫЙ ВЫХОД ИЗ ПРОГРАММЫ
+    # ПРИНУДИТЕЛЬНЫЙ ВЫХОД ИЗ ПРОГРАММЫ
+    import sys
     sys.exit(0)
 
 if __name__ == "__main__":
@@ -136,4 +137,5 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logger.error(f"Непредвиденная ошибка: {e}")
+        import sys
         sys.exit(1)
