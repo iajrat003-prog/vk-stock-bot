@@ -2,25 +2,18 @@ name: Run VK Stock Bot
 
 on:
   schedule:
-    # Запуск каждые 30 минут
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Позволяет запускать вручную
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 1 # ЖЕСТКИЙ ЛИМИТ: GitHub убьет процесс через 1 минуту, даже если он зависнет
+    timeout-minutes: 2
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Run Bot
+      - name: Run Bot (No Install needed!)
         env:
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
-        # Ставим библиотеки и запускаем скрипт в одну строчку
-        run: |
-          pip install requests feedparser
-          python bot.py
-          exit 0
+        run: python bot.py
