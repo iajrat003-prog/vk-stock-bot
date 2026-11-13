@@ -43,6 +43,7 @@ def analyze_russian_sentiment(text: str) -> float:
 
 def fetch_russian_news():
     recent_news = []
+    # Заголовки, чтобы сайты не блокировали парсер
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -138,9 +139,11 @@ def main():
         if post_to_vk_wall(message):
             logger.info(f"✅ Опубликовано: {title[:50]}...")
             alerts_sent += 1
-            time.sleep(2) # Пауза, чтобы ВК не заблокировал за спам
+            # Пауза 2 секунды между постами, чтобы ВК не выдал бан за спам
+            time.sleep(2) 
 
     logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
+    logger.info("Скрипт успешно завершил работу и выключается.")
 
 if __name__ == "__main__":
     try:
