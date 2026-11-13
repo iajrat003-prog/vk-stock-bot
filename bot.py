@@ -1,25 +1,24 @@
 import os
 import time
 import logging
-import requests
-import feedparser
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
+import json
+import ssl
 
 # --- НАСТРОЙКИ ---
-# Токен берется из секретов GitHub (Settings -> Secrets and variables -> Actions)
 VK_TOKEN = os.environ.get("VK_TOKEN") 
-VK_GROUP_ID = "243236904"  # ID вашей группы
+VK_GROUP_ID = "243236904"  
 
-# ТОЛЬКО российские компании (ищем эти слова)
 KEYWORDS = [
     "Сбер", "Газпром", "Лукойл", "Норникель", "Яндекс", 
     "Тинькофф", "Т-Банк", "ВТБ", "Роснефть", "Мосбиржа", 
     "Аэрофлот", "Магнит", "Полюс", "Сургутнефтегаз", "Рубль", "ЦБ РФ"
 ]
 
-# Слова-исключения (если новость содержит эти слова, бот её ПРОПУСТИТ)
 IGNORE_WORDS = ["Space", "SpaceX", "Nvidia", "NVDA", "Apple", "Tesla", "AAPL", "TSLA", "Amazon", "Microsoft"]
 
-# Ссылки на RSS-ленты российских новостей
 RSS_FEEDS = [
     "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",  
     "https://1prime.ru/export/rss2/index.xml",            
@@ -43,21 +42,25 @@ def analyze_russian_sentiment(text: str) -> float:
 
 def fetch_russian_news():
     recent_news = []
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+    # Отключаем проверку SSL (иногда на серверах GitHub бывают проблемы с сертификатами)
+    context = ssl._create_unverified_context()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
     for feed_url in RSS_FEEDS:
         try:
-            response = requests.get(feed_url, headers=headers, timeout=10)
-            feed = feedparser.parse(response.content)
+            req = urllib.request.Request(feed_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10, context=context) as response:
+                xml_data = response.read()
             
-            print(f"[DEBUG] Скачано новостей из {feed_url}: {len(feed.entries)}")
+            root = ET.fromstring(xml_data)
+            items = root.findall('.//item')
             
-            for entry in feed.entries:
-                title = entry.get('title', '')
-                summary = entry.get('summary', '')
-                link = entry.get('link', '')
+            print(f"[DEBUG] Скачано новостей из {feed_url}: {len(items)}")
+            
+            for item in items:
+                title = item.find('title').text if item.find('title') is not None else ''
+                link = item.find('link').text if item.find('link') is not None else ''
+                summary = item.find('description').text if item.find('description') is not None else ''
                 
                 text_to_check = (title + " " + summary).lower()
                 
@@ -69,7 +72,7 @@ def fetch_russian_news():
                         "title": title,
                         "link": link,
                         "summary": summary,
-                        "publisher": feed.feed.get('title', 'Российские новости'),
+                        "publisher": "RSS"
                     })
         except Exception as e:
             logger.error(f"Ошибка загрузки RSS {feed_url}: {e}")
@@ -80,41 +83,32 @@ def fetch_russian_news():
 def format_message(news_item: dict, score: float) -> str:
     title = news_item.get("title", "Без заголовка")
     link = news_item.get("link", "")
-    publisher = news_item.get("publisher", "Неизвестно")
 
-    if score > 0:
-        emoji = "🟢 Позитив"
-    elif score < 0:
-        emoji = "🔴 Негатив"
-    else:
-        emoji = "⚪ Нейтрально"
+    if score > 0: emoji = "🟢 Позитив"
+    elif score < 0: emoji = "🔴 Негатив"
+    else: emoji = "⚪ Нейтрально"
 
-    return (
-        f"{emoji}\n\n"
-        f"{title}\n\n"
-        f"Источник: {publisher}\n"
-        f"Подробнее: {link}"
-    )
+    return f"{emoji}\n\n{title}\n\nПодробнее: {link}"
 
 def post_to_vk_wall(text: str):
     url = "https://api.vk.com/method/wall.post"
-    owner_id = f"-{VK_GROUP_ID}"
-    
     payload = {
-        "owner_id": owner_id,
+        "owner_id": f"-{VK_GROUP_ID}",
         "from_group": 1, 
         "message": text,
         "access_token": VK_TOKEN,
         "v": "5.199"
     }
+    data = urllib.parse.urlencode(payload).encode('utf-8')
     
     try:
-        response = requests.post(url, data=payload, timeout=10)
-        data = response.json()
-        if "error" in data:
-            logger.error(f"❌ Ошибка VK API: {data['error'].get('error_msg')}")
-            return False
-        return True
+        req = urllib.request.Request(url, data=data)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            if "error" in res_data:
+                logger.error(f"❌ Ошибка VK API: {res_data['error'].get('error_msg')}")
+                return False
+            return True
     except Exception as e:
         logger.error(f"Ошибка соединения с VK: {e}")
         return False
@@ -123,7 +117,7 @@ def main():
     logger.info("Бот запущен. Проверка новостей...")
 
     if not VK_TOKEN:
-        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена в Secrets GitHub!")
+        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена!")
         os._exit(1)
 
     news_items = fetch_russian_news()
@@ -138,12 +132,11 @@ def main():
         if post_to_vk_wall(message):
             logger.info(f"✅ Опубликовано: {title[:50]}...")
             alerts_sent += 1
-            time.sleep(2) # Пауза между постами
+            time.sleep(1)
 
     logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
-    logger.info("Скрипт успешно завершил работу и выключается.")
     
-    # ЖЕСТКОЕ ЗАВЕРШЕНИЕ (100% гарантия, что бот не зависнет)
+    # Мгновенное завершение
     os._exit(0)
 
 if __name__ == "__main__":
