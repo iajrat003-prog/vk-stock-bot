@@ -2,25 +2,28 @@ name: Run VK Stock Bot
 
 on:
   schedule:
+    # Запуск каждые 30 минут по UTC
     - cron: '*/30 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Позволяет запускать вручную
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 2 # Страховка от зависаний (максимум 2 минуты)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Добавляем кэш для файла с дубликатами
-      - name: Cache seen news
+      # Кэшируем файлы памяти (чтобы бот помнил новости и алерты)
+      - name: Cache bot memory
         uses: actions/cache@v4
         with:
-          path: seen_news.json
-          key: ${{ runner.os }}-seen-news-${{ github.run_id }}
+          path: |
+            seen_news.json
+            seen_alerts.json
+          key: ${{ runner.os }}-bot-memory-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-seen-news-
+            ${{ runner.os }}-bot-memory-
 
       - name: Run Bot (No Install needed!)
         env:
