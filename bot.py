@@ -280,12 +280,12 @@ def main():
                 break # Берем только одну компанию из новости
     save_json_set(IDEAS_SEEN_FILE, seen_ideas)
 
-    # 3. Ежедневный дайджест идей (запускается только в определенный час, например, в 10:00)
-    current_hour = datetime.now().hour
+    # 3. Ежедневный дайджест идей (СЕЙЧАС ОН СРАБОТАЕТ СРАЗУ ПРИ ЗАПУСКЕ)
     today_str = datetime.now().strftime('%Y-%m-%d')
     digest_key = f"digest_{today_str}"
     
-    # if current_hour == 10 and digest_key not in seen_ideas:
+    # Убрали проверку времени, чтобы протестировать прямо сейчас
+    if digest_key not in seen_ideas:
         publish_ideas_digest()
         seen_ideas.add(digest_key)
         save_json_set(IDEAS_SEEN_FILE, seen_ideas)
