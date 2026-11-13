@@ -4,27 +4,23 @@ on:
   schedule:
     # Запуск каждые 30 минут
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Позволяет запускать бота вручную
+  workflow_dispatch: # Позволяет запускать вручную
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 2 # <-- ГАРАНТИЯ, ЧТО БОТ НЕ БУДЕТ ВИСЕТЬ ДОЛЬШЕ 2 МИНУТ
+    timeout-minutes: 1 # ЖЕСТКИЙ ЛИМИТ: GitHub убьет процесс через 1 минуту, даже если он зависнет
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          fetch-depth: 1
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run bot script
+      - name: Run Bot
         env:
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
-        run: python bot.py
+        # Ставим библиотеки и запускаем скрипт в одну строчку
+        run: |
+          pip install requests feedparser
+          python bot.py
+          exit 0
