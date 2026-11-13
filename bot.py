@@ -11,11 +11,14 @@ import ssl
 VK_TOKEN = os.environ.get("VK_TOKEN") 
 VK_GROUP_ID = "243236904"  
 
-KEYWORDS = [
-    "Сбер", "Газпром", "Лукойл", "Норникель", "Яндекс", 
-    "Тинькофф", "Т-Банк", "ВТБ", "Роснефть", "Мосбиржа", 
-    "Аэрофлот", "Магнит", "Полюс", "Сургутнефтегаз", "Рубль", "ЦБ РФ"
-]
+# Ключевые слова и их тикеры на Московской Бирже (MOEX)
+TICKER_MAP = {
+    "Сбер": "SBER", "Газпром": "GAZP", "Лукойл": "LKOH", 
+    "Норникель": "GMKN", "Яндекс": "YDEX", "Тинькофф": "T",
+    "ВТБ": "VTBR", "Роснефть": "ROSN", "Мосбиржа": "MOEX", 
+    "Аэрофлот": "AFLT", "Магнит": "MGNT", "Полюс": "PLZL",
+    "Сургутнефтегаз": "SNGS"
+}
 
 IGNORE_WORDS = ["Space", "SpaceX", "Nvidia", "NVDA", "Apple", "Tesla", "AAPL", "TSLA", "Amazon", "Microsoft"]
 
@@ -23,6 +26,8 @@ RSS_FEEDS = [
     "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",  
     "https://1prime.ru/export/rss2/index.xml",            
 ]
+
+SEEN_FILE = "seen_news.json" # Файл для защиты от дубликатов
 # -----------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -40,9 +45,42 @@ def analyze_russian_sentiment(text: str) -> float:
         if word in text: score -= 0.5
     return score
 
+def load_seen_news():
+    """Загружает список уже опубликованных ссылок."""
+    if os.path.exists(SEEN_FILE):
+        try:
+            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except: return set()
+    return set()
+
+def save_seen_news(seen_set):
+    """Сохраняет ссылки (храним только последние 100, чтобы файл не рос бесконечно)."""
+    recent_links = list(seen_set)[-100:]
+    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+        json.dump(recent_links, f, ensure_ascii=False)
+
+def get_stock_price(ticker: str):
+    """Получает текущую цену акции с Московской Биржи (MOEX)."""
+    url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json?iss.meta=off"
+    try:
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5, context=context) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            marketdata = data.get('marketdata', {}).get('data', [])
+            columns = data.get('marketdata', {}).get('columns', [])
+            
+            if marketdata and 'LAST' in columns:
+                price_idx = columns.index('LAST')
+                price = marketdata[0][price_idx]
+                if price: return round(price, 2)
+    except Exception as e:
+        logger.error(f"Не удалось получить цену для {ticker}: {e}")
+    return None
+
 def fetch_russian_news():
     recent_news = []
-    # Отключаем проверку SSL (иногда на серверах GitHub бывают проблемы с сертификатами)
     context = ssl._create_unverified_context()
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
@@ -55,8 +93,6 @@ def fetch_russian_news():
             root = ET.fromstring(xml_data)
             items = root.findall('.//item')
             
-            print(f"[DEBUG] Скачано новостей из {feed_url}: {len(items)}")
-            
             for item in items:
                 title = item.find('title').text if item.find('title') is not None else ''
                 link = item.find('link').text if item.find('link') is not None else ''
@@ -64,7 +100,7 @@ def fetch_russian_news():
                 
                 text_to_check = (title + " " + summary).lower()
                 
-                has_keyword = any(kw.lower() in text_to_check for kw in KEYWORDS)
+                has_keyword = any(kw.lower() in text_to_check for kw in TICKER_MAP.keys())
                 has_ignored = any(ig.lower() in text_to_check for ig in IGNORE_WORDS)
                 
                 if has_keyword and not has_ignored:
@@ -72,7 +108,6 @@ def fetch_russian_news():
                         "title": title,
                         "link": link,
                         "summary": summary,
-                        "publisher": "RSS"
                     })
         except Exception as e:
             logger.error(f"Ошибка загрузки RSS {feed_url}: {e}")
@@ -80,15 +115,26 @@ def fetch_russian_news():
     unique_news = {v['title']: v for v in recent_news}.values()
     return list(unique_news)
 
-def format_message(news_item: dict, score: float) -> str:
+def format_message(news_item: dict) -> str:
     title = news_item.get("title", "Без заголовка")
     link = news_item.get("link", "")
+    text_to_check = (title + " " + news_item.get("summary", "")).lower()
+    score = analyze_russian_sentiment(text_to_check)
 
     if score > 0: emoji = "🟢 Позитив"
     elif score < 0: emoji = "🔴 Негатив"
     else: emoji = "⚪ Нейтрально"
 
-    return f"{emoji}\n\n{title}\n\nПодробнее: {link}"
+    # Ищем, про какую компанию новость, чтобы подтянуть цену
+    stock_info = ""
+    for name, ticker in TICKER_MAP.items():
+        if name.lower() in text_to_check:
+            price = get_stock_price(ticker)
+            if price:
+                stock_info = f"📈 {name} ({ticker}): {price} ₽\n"
+                break # Берем первую найденную компанию
+
+    return f"{emoji}\n\n{title}\n\n{stock_info}Подробнее: {link}"
 
 def post_to_vk_wall(text: str):
     url = "https://api.vk.com/method/wall.post"
@@ -120,23 +166,27 @@ def main():
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена!")
         os._exit(1)
 
+    seen_news = load_seen_news()
     news_items = fetch_russian_news()
-    logger.info(f"После фильтрации осталось новостей: {len(news_items)}")
+    
+    # Фильтруем те, что уже видели
+    new_items = [item for item in news_items if item['link'] not in seen_news]
+    logger.info(f"Всего новостей: {len(news_items)}. Новых: {len(new_items)}")
 
     alerts_sent = 0
-    for item in news_items:
-        title = item.get("title", "")
-        score = analyze_russian_sentiment(title + " " + item.get("summary", ""))
-        message = format_message(item, score)
+    for item in new_items:
+        message = format_message(item)
         
         if post_to_vk_wall(message):
-            logger.info(f"✅ Опубликовано: {title[:50]}...")
+            logger.info(f"✅ Опубликовано: {item['title'][:50]}...")
             alerts_sent += 1
+            seen_news.add(item['link'])
             time.sleep(1)
 
-    logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
+    if alerts_sent > 0:
+        save_seen_news(seen_news)
     
-    # Мгновенное завершение
+    logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
     os._exit(0)
 
 if __name__ == "__main__":
