@@ -285,7 +285,7 @@ def main():
     today_str = datetime.now().strftime('%Y-%m-%d')
     digest_key = f"digest_{today_str}"
     
-    if current_hour == 10 and digest_key not in seen_ideas:
+    # if current_hour == 10 and digest_key not in seen_ideas:
         publish_ideas_digest()
         seen_ideas.add(digest_key)
         save_json_set(IDEAS_SEEN_FILE, seen_ideas)
