@@ -2,13 +2,14 @@ name: Run VK Stock Bot
 
 on:
   schedule:
-    # Запуск каждые 30 минут (время в UTC, то есть по Гринвичу)
+    # Запуск каждые 30 минут
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Позволяет запускать бота вручную кнопкой
+  workflow_dispatch: # Позволяет запускать бота вручную
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 2 # <-- ГАРАНТИЯ, ЧТО БОТ НЕ БУДЕТ ВИСЕТЬ ДОЛЬШЕ 2 МИНУТ
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,5 +26,5 @@ jobs:
 
       - name: Run bot script
         env:
-          VK_TOKEN: ${{ secrets.VK_TOKEN }} # Передача токена
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
         run: python bot.py
