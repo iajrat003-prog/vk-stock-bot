@@ -13,6 +13,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Добавляем кэш для файла с дубликатами
+      - name: Cache seen news
+        uses: actions/cache@v4
+        with:
+          path: seen_news.json
+          key: ${{ runner.os }}-seen-news-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-seen-news-
+
       - name: Run Bot (No Install needed!)
         env:
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
