@@ -3,20 +3,23 @@ import time
 import logging
 import requests
 import feedparser
-import sys  # <--- ДОБАВЛЕНО ДЛЯ ПРИНУДИТЕЛЬНОГО ВЫХОДА
 
 # --- НАСТРОЙКИ ---
+# Токен берется из секретов GitHub (Settings -> Secrets and variables -> Actions)
 VK_TOKEN = os.environ.get("VK_TOKEN") 
-VK_GROUP_ID = "243236904"  
+VK_GROUP_ID = "243236904"  # ID вашей группы
 
+# ТОЛЬКО российские компании (ищем эти слова)
 KEYWORDS = [
     "Сбер", "Газпром", "Лукойл", "Норникель", "Яндекс", 
     "Тинькофф", "Т-Банк", "ВТБ", "Роснефть", "Мосбиржа", 
     "Аэрофлот", "Магнит", "Полюс", "Сургутнефтегаз", "Рубль", "ЦБ РФ"
 ]
 
+# Слова-исключения (если новость содержит эти слова, бот её ПРОПУСТИТ)
 IGNORE_WORDS = ["Space", "SpaceX", "Nvidia", "NVDA", "Apple", "Tesla", "AAPL", "TSLA", "Amazon", "Microsoft"]
 
+# Ссылки на RSS-ленты российских новостей
 RSS_FEEDS = [
     "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",  
     "https://1prime.ru/export/rss2/index.xml",            
@@ -40,7 +43,9 @@ def analyze_russian_sentiment(text: str) -> float:
 
 def fetch_russian_news():
     recent_news = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
 
     for feed_url in RSS_FEEDS:
         try:
@@ -77,16 +82,26 @@ def format_message(news_item: dict, score: float) -> str:
     link = news_item.get("link", "")
     publisher = news_item.get("publisher", "Неизвестно")
 
-    if score > 0: emoji = "🟢 Позитив"
-    elif score < 0: emoji = "🔴 Негатив"
-    else: emoji = "⚪ Нейтрально"
+    if score > 0:
+        emoji = "🟢 Позитив"
+    elif score < 0:
+        emoji = "🔴 Негатив"
+    else:
+        emoji = "⚪ Нейтрально"
 
-    return f"{emoji}\n\n{title}\n\nИсточник: {publisher}\nПодробнее: {link}"
+    return (
+        f"{emoji}\n\n"
+        f"{title}\n\n"
+        f"Источник: {publisher}\n"
+        f"Подробнее: {link}"
+    )
 
 def post_to_vk_wall(text: str):
     url = "https://api.vk.com/method/wall.post"
+    owner_id = f"-{VK_GROUP_ID}"
+    
     payload = {
-        "owner_id": f"-{VK_GROUP_ID}",
+        "owner_id": owner_id,
         "from_group": 1, 
         "message": text,
         "access_token": VK_TOKEN,
@@ -109,7 +124,7 @@ def main():
 
     if not VK_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная VK_TOKEN не найдена в Secrets GitHub!")
-        return
+        os._exit(1)
 
     news_items = fetch_russian_news()
     logger.info(f"После фильтрации осталось новостей: {len(news_items)}")
@@ -123,19 +138,17 @@ def main():
         if post_to_vk_wall(message):
             logger.info(f"✅ Опубликовано: {title[:50]}...")
             alerts_sent += 1
-            time.sleep(2) # Пауза только между постами
+            time.sleep(2) # Пауза между постами
 
     logger.info(f"Проверка завершена. Опубликовано постов: {alerts_sent}")
     logger.info("Скрипт успешно завершил работу и выключается.")
     
-    # ПРИНУДИТЕЛЬНЫЙ ВЫХОД ИЗ ПРОГРАММЫ
-    import sys
-    sys.exit(0)
+    # ЖЕСТКОЕ ЗАВЕРШЕНИЕ (100% гарантия, что бот не зависнет)
+    os._exit(0)
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         logger.error(f"Непредвиденная ошибка: {e}")
-        import sys
-        sys.exit(1)
+        os._exit(1)
