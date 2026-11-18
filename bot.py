@@ -68,7 +68,7 @@ def get_macro_info():
             data = json.loads(response.read().decode('utf-8'))
             usd = data['Valute']['USD']['Value']
             eur = data['Valute']['EUR']['Value']
-            return f"🌍 Курс ЦБ: USD {usd:.2f} ₽ | EUR {eur:.2f} ₽"
+            return f"💱 Валютный рынок: доллар торгуется по {usd:.2f} ₽, евро — по {eur:.2f} ₽."
     except:
         return ""
 
@@ -86,7 +86,6 @@ def calculate_rsi(prices, periods=14):
     return 100 - (100 / (1 + rs))
 
 def get_basic_price_info(ticker: str):
-    """Быстрый запрос только текущей цены и изменения за день (для алертов)."""
     context = ssl._create_unverified_context()
     url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json?iss.meta=off"
     try:
@@ -99,12 +98,10 @@ def get_basic_price_info(ticker: str):
                 price = round(md_data[0][md_cols.index('LAST')], 2)
                 day_change = md_data[0][md_cols.index('LASTTOPREVPRICE')] if 'LASTTOPREVPRICE' in md_cols else None
                 return price, day_change
-    except:
-        pass
+    except: pass
     return None, None
 
 def get_full_stock_info(ticker: str):
-    """Расширенный запрос: цена, тренды, RSI, P/E (для новостей)."""
     context = ssl._create_unverified_context()
     current_price, day_change = get_basic_price_info(ticker)
     month_change, rsi, pe = None, None, None
@@ -164,27 +161,50 @@ def format_news_message(news_item: dict) -> str:
     link = news_item.get("link", "")
     text_to_check = (title + " " + news_item.get("summary", "")).lower()
     score = analyze_russian_sentiment(text_to_check)
-    emoji = "🟢 Позитив" if score > 0 else "🔴 Негатив" if score < 0 else "⚪ Нейтрально"
+    
+    # Человеческое вступление в зависимости от тональности
+    if score > 0: 
+        intro = "Хорошие новости для рынка:"
+    elif score < 0: 
+        intro = "Неприятные вести для инвесторов:"
+    else: 
+        intro = "Свежие новости с рынка:"
 
     stock_info = ""
     for name, ticker in TICKER_MAP.items():
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
-                stock_info = f"📈 **{name}** ({ticker}): {price} ₽\n"
-                if day_change is not None: stock_info += f"   День: {'↗️' if day_change > 0 else '↘️' if day_change < 0 else '➖'} {day_change:+.2f}%\n"
-                if month_change is not None: stock_info += f"   Месяц: {'↗️' if month_change > 0 else '↘️' if month_change < 0 else '➖'} {month_change:+.2f}%\n"
-                if pe is not None: stock_info += f"   💡 P/E: {pe}\n"
+                # Формируем живое описание графика
+                stock_info = f"\n📊 Как чувствует себя {name} ({ticker}):\n"
+                stock_info += f"Цена сейчас — {price} ₽. "
+                
+                if day_change is not None:
+                    if day_change > 0: stock_info += f"За день бумага подросла на {day_change:.2f}%. "
+                    elif day_change < 0: stock_info += f"Днем акция просела на {abs(day_change):.2f}%. "
+                    else: stock_info += "Днем цена почти не изменилась. "
+                    
+                if month_change is not None:
+                    if month_change > 0: stock_info += f"За месяц рост составил {month_change:.2f}%. "
+                    elif month_change < 0: stock_info += f"За месяц падение на {abs(month_change):.2f}%. "
+                
+                stock_info += "\n"
+                
+                if pe is not None: 
+                    stock_info += f"Мультипликатор P/E: {pe}.\n"
+                    
                 if rsi is not None:
-                    rsi_status = "🚀 Перепродана" if rsi < 30 else "⚠️ Перекуплена" if rsi > 70 else "Нейтрально"
-                    stock_info += f"   RSI: {rsi} ({rsi_status})\n"
+                    if rsi < 30: stock_info += f"Индекс RSI равен {rsi} — акция сильно перепродана, возможно скорое восстановление.\n"
+                    elif rsi > 70: stock_info += f"Индекс RSI равен {rsi} — бумага перекуплена, стоит быть осторожнее с покупками.\n"
+                    else: stock_info += f"Индекс RSI ({rsi}) находится в нейтральной зоне.\n"
             break
             
     macro_info = get_macro_info()
-    return f"{emoji}\n\n{title}\n\n{stock_info}\n{macro_info}\n\nПодробнее: {link}"
+    macro_text = f"\n{macro_info}" if macro_info else ""
+    
+    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}\n\nПочитать подробнее: {link}"
 
 def check_market_alerts():
-    """Проверяет резкие движения цен (от 2.5% за день)."""
     logger.info("Проверка резких движений цен...")
     seen_alerts = load_json_set(SEEN_ALERTS_FILE)
     today = datetime.now().strftime('%Y-%m-%d')
@@ -192,17 +212,19 @@ def check_market_alerts():
     
     for name, ticker in TICKER_MAP.items():
         alert_key = f"alert_{ticker}_{today}"
-        if alert_key in seen_alerts: continue # Уже отправляли алерт по этой акции сегодня
+        if alert_key in seen_alerts: continue
             
         price, day_change = get_basic_price_info(ticker)
         if price and day_change is not None and abs(day_change) >= 2.5: 
             movers.append((name, ticker, price, day_change, alert_key))
             
     if movers:
-        text = "🚨 **ВНИМАНИЕ: РЕЗКИЕ ДВИЖЕНИЯ**\n\n"
+        text = "⚡️ Срочные движения на бирже!\n\n"
         for name, ticker, price, day_change, alert_key in movers:
-            emoji = "🟢" if day_change > 0 else "🔴"
-            text += f"{emoji} **{name}** ({ticker}): {price} ₽ ({day_change:+.2f}%)\n"
+            if day_change > 0:
+                text += f"🟢 Бумаги «{name}» ({ticker}) показывают резкий рост — плюс {day_change:.2f}% за день. Сейчас торгуются по {price} ₽.\n"
+            else:
+                text += f"🔴 Акции «{name}» ({ticker}) заметно просели — минус {abs(day_change):.2f}% за день. Цена опустилась до {price} ₽.\n"
             seen_alerts.add(alert_key)
         
         if post_to_vk_wall(text):
@@ -210,7 +232,6 @@ def check_market_alerts():
             save_json_set(SEEN_ALERTS_FILE, seen_alerts)
 
 def publish_market_digest():
-    """Публикует итоги дня (ТОП-3 роста и падения)."""
     logger.info("Сбор итогов торгового дня...")
     data = []
     for name, ticker in TICKER_MAP.items():
@@ -225,14 +246,15 @@ def publish_market_digest():
     losers = data[-3:]
     losers.reverse()
     
-    text = "📊 **ИТОГИ ТОРГОВОГО ДНЯ**\n\n"
-    text += "🟢 **Лидеры роста:**\n"
+    text = "📊 Подводим итоги торгового дня на Мосбирже.\n\n"
+    
+    text += "В лидерах роста сегодня:\n"
     for name, ticker, price, change in gainers:
-        if change > 0: text += f"• {name} ({ticker}): {price} ₽ ({change:+.2f}%)\n"
+        if change > 0: text += f"• {name} прибавил {change:.2f}% (до {price} ₽).\n"
             
-    text += "\n🔴 **Лидеры падения:**\n"
+    text += "\nХуже рынка торговались:\n"
     for name, ticker, price, change in losers:
-        if change < 0: text += f"• {name} ({ticker}): {price} ₽ ({change:+.2f}%)\n"
+        if change < 0: text += f"• {name} потерял {abs(change):.2f}% (цена опустилась до {price} ₽).\n"
             
     if post_to_vk_wall(text):
         logger.info("✅ Вечерний дайджест опубликован.")
@@ -257,7 +279,6 @@ def main():
     logger.info("Бот запущен...")
     if not VK_TOKEN: os._exit(1)
 
-    # 1. Новости
     seen_news = load_json_set(SEEN_NEWS_FILE)
     new_news = [item for item in fetch_russian_news() if item['link'] not in seen_news]
     
@@ -269,10 +290,8 @@ def main():
             time.sleep(1)
     if alerts_sent > 0: save_json_set(SEEN_NEWS_FILE, seen_news)
 
-    # 2. Алерты о движениях цен (проверяются каждый запуск)
     check_market_alerts()
 
-    # 3. Вечерний дайджест (запускается в 18:30 UTC = 21:30 МСК)
     now = datetime.utcnow()
     today_str = datetime.now().strftime('%Y-%m-%d')
     digest_key = f"digest_{today_str}"
