@@ -29,6 +29,9 @@ RSS_FEEDS = [
 
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_ALERTS_FILE = "seen_alerts.json"
+
+# Текст призыва к действию (добавляется ко всем постам)
+CALL_TO_ACTION = "\n\n👉 Больше аналитики и сигналов в нашем сообществе: @club243236904"
 # -----------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -162,7 +165,6 @@ def format_news_message(news_item: dict) -> str:
     text_to_check = (title + " " + news_item.get("summary", "")).lower()
     score = analyze_russian_sentiment(text_to_check)
     
-    # Человеческое вступление в зависимости от тональности
     if score > 0: 
         intro = "Хорошие новости для рынка:"
     elif score < 0: 
@@ -175,7 +177,6 @@ def format_news_message(news_item: dict) -> str:
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
-                # Формируем живое описание графика
                 stock_info = f"\n📊 Как чувствует себя {name} ({ticker}):\n"
                 stock_info += f"Цена сейчас — {price} ₽. "
                 
@@ -202,7 +203,8 @@ def format_news_message(news_item: dict) -> str:
     macro_info = get_macro_info()
     macro_text = f"\n{macro_info}" if macro_info else ""
     
-    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}\n\nПочитать подробнее: {link}"
+    # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
+    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}\n\nПочитать подробнее: {link}{CALL_TO_ACTION}"
 
 def check_market_alerts():
     logger.info("Проверка резких движений цен...")
@@ -226,6 +228,9 @@ def check_market_alerts():
             else:
                 text += f"🔴 Акции «{name}» ({ticker}) заметно просели — минус {abs(day_change):.2f}% за день. Цена опустилась до {price} ₽.\n"
             seen_alerts.add(alert_key)
+        
+        # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
+        text += CALL_TO_ACTION
         
         if post_to_vk_wall(text):
             logger.info(f"✅ Опубликованы алерты по {len(movers)} акциям.")
@@ -256,6 +261,9 @@ def publish_market_digest():
     for name, ticker, price, change in losers:
         if change < 0: text += f"• {name} потерял {abs(change):.2f}% (цена опустилась до {price} ₽).\n"
             
+    # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
+    text += CALL_TO_ACTION
+    
     if post_to_vk_wall(text):
         logger.info("✅ Вечерний дайджест опубликован.")
 
