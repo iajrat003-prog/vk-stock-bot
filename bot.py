@@ -6,15 +6,17 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import json
 import ssl
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # --- НАСТРОЙКИ ---
 VK_TOKEN = os.environ.get("VK_TOKEN")
 VK_GROUP_ID = "243236904"
 
+# Обновили Тинькофф на Т-Технологии (тикер T)
 TICKER_MAP = {
     "Сбер": "SBER", "Газпром": "GAZP", "Лукойл": "LKOH", 
-    "Норникель": "GMKN", "Яндекс": "YDEX", "Тинькофф": "T",
+    "Норникель": "GMKN", "Яндекс": "YDEX", 
+    "Т-Технологии": "T", "Тинькофф": "T", "Т-Банк": "T",
     "ВТБ": "VTBR", "Роснефть": "ROSN", "Мосбиржа": "MOEX", 
     "Аэрофлот": "AFLT", "Магнит": "MGNT", "Полюс": "PLZL",
     "Сургутнефтегаз": "SNGS", "Татнефть": "TATN", "Новатэк": "NVTK"
@@ -177,7 +179,9 @@ def format_news_message(news_item: dict) -> str:
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
-                stock_info = f"\n📊 Как чувствует себя {name} ({ticker}):\n"
+                # Если в новости написали "Тинькофф", в посте лучше вывести "Т-Технологии"
+                display_name = "Т-Технологии" if ticker == "T" else name
+                stock_info = f"\n📊 Как чувствует себя {display_name} ({ticker}):\n"
                 stock_info += f"Цена сейчас — {price} ₽. "
                 
                 if day_change is not None:
@@ -203,36 +207,14 @@ def format_news_message(news_item: dict) -> str:
     macro_info = get_macro_info()
     macro_text = f"\n{macro_info}" if macro_info else ""
     
-    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}\n\nПочитать подробнее: {link}{CALL_TO_ACTION}"
-
-def create_poll(question: str, answers: list):
-    """Создает опрос в сообществе и возвращает его ID для прикрепления."""
-    url = "https://api.vk.com/method/polls.create"
-    answers_json = json.dumps([{"text": ans} for ans in answers], ensure_ascii=False)
+    interactive_block = (
+        "\n\n📊 **А как думаешь ты?**\n"
+        "👍 — Акция пойдет вверх\n"
+        "👎 — Акция упадет\n"
+        "Напиши свой вариант в комментариях! 👇"
+    )
     
-    payload = {
-        "owner_id": f"-{VK_GROUP_ID}",
-        "question": question,
-        "is_anonymous": 1,
-        "is_multiple": 0,
-        "answers": answers_json,
-        "access_token": VK_TOKEN,
-        "v": "5.199"
-    }
-    
-    try:
-        data = urllib.parse.urlencode(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=data)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res = json.loads(response.read().decode('utf-8'))
-            if "response" in res:
-                poll_id = res["response"]["id"]
-                return f"poll-{VK_GROUP_ID}_{poll_id}"
-            elif "error" in res:
-                logger.error(f"Ошибка создания опроса: {res['error'].get('error_msg')}")
-    except Exception as e:
-        logger.error(f"Ошибка соединения при создании опроса: {e}")
-    return None
+    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}{interactive_block}{CALL_TO_ACTION}"
 
 def check_market_alerts():
     logger.info("Проверка резких движений цен...")
@@ -246,7 +228,8 @@ def check_market_alerts():
             
         price, day_change = get_basic_price_info(ticker)
         if price and day_change is not None and abs(day_change) >= 2.5: 
-            movers.append((name, ticker, price, day_change, alert_key))
+            display_name = "Т-Технологии" if ticker == "T" else name
+            movers.append((display_name, ticker, price, day_change, alert_key))
             
     if movers:
         text = "⚡️ Срочные движения на бирже!\n\n"
@@ -269,7 +252,8 @@ def publish_market_digest():
     for name, ticker in TICKER_MAP.items():
         price, day_change = get_basic_price_info(ticker)
         if price and day_change is not None:
-            data.append((name, ticker, price, day_change))
+            display_name = "Т-Технологии" if ticker == "T" else name
+            data.append((display_name, ticker, price, day_change))
             
     if not data: return
     
@@ -293,7 +277,7 @@ def publish_market_digest():
     if post_to_vk_wall(text):
         logger.info("✅ Вечерний дайджест опубликован.")
 
-def post_to_vk_wall(text: str, attachment: str = None):
+def post_to_vk_wall(text: str):
     url = "https://api.vk.com/method/wall.post"
     payload = {
         "owner_id": f"-{VK_GROUP_ID}", 
@@ -302,8 +286,6 @@ def post_to_vk_wall(text: str, attachment: str = None):
         "access_token": VK_TOKEN, 
         "v": "5.199"
     }
-    if attachment:
-        payload["attachments"] = attachment
         
     data = urllib.parse.urlencode(payload).encode('utf-8')
     try:
@@ -327,14 +309,7 @@ def main():
     
     alerts_sent = 0
     for item in new_news:
-        # Пробуем создать опрос к новости
-        poll_attach = create_poll(
-            question="Как думаешь, что будет с акцией дальше?", 
-            answers=["Пойдет вверх 🚀", "Упадет 📉", "Останется на месте ➖"]
-        )
-        
-        # Отправляем пост с опросом (если опрос создался) или без него
-        if post_to_vk_wall(format_news_message(item), attachment=poll_attach):
+        if post_to_vk_wall(format_news_message(item)):
             alerts_sent += 1
             seen_news.add(item['link'])
             time.sleep(1)
@@ -344,12 +319,12 @@ def main():
 
     check_market_alerts()
 
-    now = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
     today_str = datetime.now().strftime('%Y-%m-%d')
     digest_key = f"digest_{today_str}"
     seen_alerts = load_json_set(SEEN_ALERTS_FILE)
     
-    if now.hour == 18 and digest_key not in seen_alerts:
+    if now_utc.hour == 18 and digest_key not in seen_alerts:
         publish_market_digest()
         seen_alerts.add(digest_key)
         save_json_set(SEEN_ALERTS_FILE, seen_alerts)
