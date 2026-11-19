@@ -30,7 +30,7 @@ RSS_FEEDS = [
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_ALERTS_FILE = "seen_alerts.json"
 
-# Текст призыва к действию (добавляется ко всем постам)
+# Призыв к действию
 CALL_TO_ACTION = "\n\n👉 Больше аналитики и сигналов в нашем сообществе: @club243236904"
 # -----------------
 
@@ -203,8 +203,36 @@ def format_news_message(news_item: dict) -> str:
     macro_info = get_macro_info()
     macro_text = f"\n{macro_info}" if macro_info else ""
     
-    # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
     return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}\n\nПочитать подробнее: {link}{CALL_TO_ACTION}"
+
+def create_poll(question: str, answers: list):
+    """Создает опрос в сообществе и возвращает его ID для прикрепления."""
+    url = "https://api.vk.com/method/polls.create"
+    answers_json = json.dumps([{"text": ans} for ans in answers], ensure_ascii=False)
+    
+    payload = {
+        "owner_id": f"-{VK_GROUP_ID}",
+        "question": question,
+        "is_anonymous": 1,
+        "is_multiple": 0,
+        "answers": answers_json,
+        "access_token": VK_TOKEN,
+        "v": "5.199"
+    }
+    
+    try:
+        data = urllib.parse.urlencode(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res = json.loads(response.read().decode('utf-8'))
+            if "response" in res:
+                poll_id = res["response"]["id"]
+                return f"poll-{VK_GROUP_ID}_{poll_id}"
+            elif "error" in res:
+                logger.error(f"Ошибка создания опроса: {res['error'].get('error_msg')}")
+    except Exception as e:
+        logger.error(f"Ошибка соединения при создании опроса: {e}")
+    return None
 
 def check_market_alerts():
     logger.info("Проверка резких движений цен...")
@@ -229,7 +257,6 @@ def check_market_alerts():
                 text += f"🔴 Акции «{name}» ({ticker}) заметно просели — минус {abs(day_change):.2f}% за день. Цена опустилась до {price} ₽.\n"
             seen_alerts.add(alert_key)
         
-        # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
         text += CALL_TO_ACTION
         
         if post_to_vk_wall(text):
@@ -261,15 +288,23 @@ def publish_market_digest():
     for name, ticker, price, change in losers:
         if change < 0: text += f"• {name} потерял {abs(change):.2f}% (цена опустилась до {price} ₽).\n"
             
-    # ДОБАВЛЯЕМ ПРИЗЫВ В КОНЕЦ
     text += CALL_TO_ACTION
     
     if post_to_vk_wall(text):
         logger.info("✅ Вечерний дайджест опубликован.")
 
-def post_to_vk_wall(text: str):
+def post_to_vk_wall(text: str, attachment: str = None):
     url = "https://api.vk.com/method/wall.post"
-    payload = {"owner_id": f"-{VK_GROUP_ID}", "from_group": 1, "message": text, "access_token": VK_TOKEN, "v": "5.199"}
+    payload = {
+        "owner_id": f"-{VK_GROUP_ID}", 
+        "from_group": 1, 
+        "message": text, 
+        "access_token": VK_TOKEN, 
+        "v": "5.199"
+    }
+    if attachment:
+        payload["attachments"] = attachment
+        
     data = urllib.parse.urlencode(payload).encode('utf-8')
     try:
         req = urllib.request.Request(url, data=data)
@@ -292,11 +327,20 @@ def main():
     
     alerts_sent = 0
     for item in new_news:
-        if post_to_vk_wall(format_news_message(item)):
+        # Пробуем создать опрос к новости
+        poll_attach = create_poll(
+            question="Как думаешь, что будет с акцией дальше?", 
+            answers=["Пойдет вверх 🚀", "Упадет 📉", "Останется на месте ➖"]
+        )
+        
+        # Отправляем пост с опросом (если опрос создался) или без него
+        if post_to_vk_wall(format_news_message(item), attachment=poll_attach):
             alerts_sent += 1
             seen_news.add(item['link'])
             time.sleep(1)
-    if alerts_sent > 0: save_json_set(SEEN_NEWS_FILE, seen_news)
+            
+    if alerts_sent > 0: 
+        save_json_set(SEEN_NEWS_FILE, seen_news)
 
     check_market_alerts()
 
