@@ -22,6 +22,9 @@ TICKER_MAP = {
     "Сургутнефтегаз": "SNGS", "Татнефть": "TATN", "Новатэк": "NVTK"
 }
 
+# Слова-маркеры, которые ОБЯЗАТЕЛЬНО должны быть в новости, чтобы бот её взял
+FINANCIAL_CONTEXT = ["акци", "дивиденд", "прибыл", "биржа", "торг", "котиров", "бумаг", "инвест", "рынок", "капитал", "убыток"]
+
 IGNORE_WORDS = ["Space", "SpaceX", "Nvidia", "NVDA", "Apple", "Tesla", "AAPL", "TSLA", "Amazon", "Microsoft"]
 
 RSS_FEEDS = [
@@ -32,7 +35,6 @@ RSS_FEEDS = [
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_ALERTS_FILE = "seen_alerts.json"
 
-# Призыв к действию
 CALL_TO_ACTION = "\n\n👉 Больше аналитики и сигналов в нашем сообществе: @club243236904"
 # -----------------
 
@@ -156,7 +158,13 @@ def fetch_russian_news():
                 link = item.find('link').text if item.find('link') is not None else ''
                 summary = item.find('description').text if item.find('description') is not None else ''
                 text_to_check = (title + " " + summary).lower()
-                if any(kw.lower() in text_to_check for kw in TICKER_MAP.keys()) and not any(ig.lower() in text_to_check for ig in IGNORE_WORDS):
+                
+                # ЖЕСТКИЙ ФИЛЬТР: Должна быть компания И финансовый контекст
+                has_ticker = any(kw.lower() in text_to_check for kw in TICKER_MAP.keys())
+                has_fin_context = any(ctx in text_to_check for ctx in FINANCIAL_CONTEXT)
+                has_ignored = any(ig.lower() in text_to_check for ig in IGNORE_WORDS)
+                
+                if has_ticker and has_fin_context and not has_ignored:
                     recent_news.append({"title": title, "link": link, "summary": summary})
         except: pass
     return list({v['title']: v for v in recent_news}.values())
@@ -175,11 +183,12 @@ def format_news_message(news_item: dict) -> str:
         intro = "Свежие новости с рынка:"
 
     stock_info = ""
+    has_stock_data = False
+    
     for name, ticker in TICKER_MAP.items():
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
-                # Если в новости написали "Тинькофф", в посте лучше вывести "Т-Технологии"
                 display_name = "Т-Технологии" if ticker == "T" else name
                 stock_info = f"\n📊 Как чувствует себя {display_name} ({ticker}):\n"
                 stock_info += f"Цена сейчас — {price} ₽. "
@@ -202,17 +211,22 @@ def format_news_message(news_item: dict) -> str:
                     if rsi < 30: stock_info += f"Индекс RSI равен {rsi} — акция сильно перепродана, возможно скорое восстановление.\n"
                     elif rsi > 70: stock_info += f"Индекс RSI равен {rsi} — бумага перекуплена, стоит быть осторожнее с покупками.\n"
                     else: stock_info += f"Индекс RSI ({rsi}) находится в нейтральной зоне.\n"
+                
+                has_stock_data = True
             break
             
     macro_info = get_macro_info()
     macro_text = f"\n{macro_info}" if macro_info else ""
     
-    interactive_block = (
-        "\n\n📊 **А как думаешь ты?**\n"
-        "👍 — Акция пойдет вверх\n"
-        "👎 — Акция упадет\n"
-        "Напиши свой вариант в комментариях! 👇"
-    )
+    # ИНТЕРАКТИВ ТОЛЬКО ЕСЛИ ЕСТЬ ДАННЫЕ ПО АКЦИИ
+    interactive_block = ""
+    if has_stock_data:
+        interactive_block = (
+            "\n\n📊 **А как думаешь ты?**\n"
+            "👍 — Акция пойдет вверх\n"
+            "👎 — Акция упадет\n"
+            "Напиши свой вариант в комментариях! 👇"
+        )
     
     return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}{interactive_block}{CALL_TO_ACTION}"
 
@@ -228,22 +242,38 @@ def check_market_alerts():
             
         price, day_change = get_basic_price_info(ticker)
         if price and day_change is not None and abs(day_change) >= 2.5: 
+            _, _, _, rsi, _ = get_full_stock_info(ticker)
             display_name = "Т-Технологии" if ticker == "T" else name
-            movers.append((display_name, ticker, price, day_change, alert_key))
+            movers.append((display_name, ticker, price, day_change, rsi, alert_key))
             
     if movers:
+        movers.sort(key=lambda x: abs(x[3]), reverse=True)
+        top_movers = movers[:3]
+        
         text = "⚡️ Срочные движения на бирже!\n\n"
-        for name, ticker, price, day_change, alert_key in movers:
+        for name, ticker, price, day_change, rsi, alert_key in top_movers:
             if day_change > 0:
-                text += f"🟢 Бумаги «{name}» ({ticker}) показывают резкий рост — плюс {day_change:.2f}% за день. Сейчас торгуются по {price} ₽.\n"
+                text += f"🟢 «{name}» ({ticker}) растет на {day_change:.2f}% (до {price} ₽).\n"
             else:
-                text += f"🔴 Акции «{name}» ({ticker}) заметно просели — минус {abs(day_change):.2f}% за день. Цена опустилась до {price} ₽.\n"
+                text += f"🔴 «{name}» ({ticker}) падает на {abs(day_change):.2f}% (до {price} ₽).\n"
+            
+            if rsi is not None:
+                if rsi < 30:
+                    text += f"   ↳ RSI: {rsi} (зона перепроданности, возможен отскок).\n"
+                elif rsi > 70:
+                    text += f"   ↳ RSI: {rsi} (зона перекупленности, риск падения).\n"
+                else:
+                    text += f"   ↳ RSI: {rsi} (нейтральная зона).\n"
+            text += "\n"
             seen_alerts.add(alert_key)
         
+        for _, _, _, _, _, alert_key in movers[3:]:
+            seen_alerts.add(alert_key)
+            
         text += CALL_TO_ACTION
         
         if post_to_vk_wall(text):
-            logger.info(f"✅ Опубликованы алерты по {len(movers)} акциям.")
+            logger.info(f"✅ Опубликованы алерты по {len(top_movers)} акциям.")
             save_json_set(SEEN_ALERTS_FILE, seen_alerts)
 
 def publish_market_digest():
