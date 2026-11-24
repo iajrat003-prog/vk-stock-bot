@@ -141,10 +141,21 @@ def upload_photo_to_vk(image_url, caption=""):
         with urllib.request.urlopen(req, timeout=10, context=context) as response:
             img_data = response.read()
 
-        url_get_server = f"https://api.vk.com/method/photos.getWallUploadServer?group_id={VK_GROUP_ID}&access_token={VK_TOKEN}&v=5.199"
-        with urllib.request.urlopen(url_get_server, context=context) as response:
-            upload_url = json.loads(response.read().decode('utf-8'))['response']['upload_url']
+        # 1. Получаем адрес сервера для загрузки
+        url_get_server = "https://api.vk.com/method/photos.getWallUploadServer"
+        params_get = urllib.parse.urlencode({
+            'group_id': VK_GROUP_ID,
+            'access_token': VK_TOKEN,
+            'v': '5.199'
+        })
+        with urllib.request.urlopen(f"{url_get_server}?{params_get}", context=context) as response:
+            server_res = json.loads(response.read().decode('utf-8'))
+            if "error" in server_res:
+                logger.error(f"❌ Ошибка ВК (нет прав на фото?): {server_res['error'].get('error_msg')}")
+                return None
+            upload_url = server_res['response']['upload_url']
 
+        # 2. Загружаем файл
         boundary = uuid.uuid4().hex
         body = b'--' + boundary.encode() + b'\r\n'
         body += b'Content-Disposition: form-data; name="photo"; filename="chart.jpg"\r\n'
@@ -155,16 +166,28 @@ def upload_photo_to_vk(image_url, caption=""):
         with urllib.request.urlopen(req_upload, context=context) as response:
             upload_res = json.loads(response.read().decode('utf-8'))
 
-        params = urllib.parse.urlencode({
-            'group_id': VK_GROUP_ID, 'photo': upload_res['photo'], 
-            'server': upload_res['server'], 'hash': upload_res['hash'], 
-            'caption': caption, 'access_token': VK_TOKEN, 'v': '5.199'
+        # 3. Сохраняем фото
+        url_save = "https://api.vk.com/method/photos.saveWallPhoto"
+        params_save = urllib.parse.urlencode({
+            'group_id': VK_GROUP_ID, 
+            'photo': upload_res['photo'], 
+            'server': upload_res['server'], 
+            'hash': upload_res['hash'], 
+            'caption': caption, 
+            'access_token': VK_TOKEN, 
+            'v': '5.199'
         })
-        with urllib.request.urlopen(f"https://api.vk.com/method/photos.saveWallPhoto?{params}", context=context) as response:
-            save_res = json.loads(response.read().decode('utf-8'))['response'][0]
-            return f"photo{save_res['owner_id']}_{save_res['id']}"
+        with urllib.request.urlopen(f"{url_save}?{params_save}", context=context) as response:
+            save_res = json.loads(response.read().decode('utf-8'))
+            if "error" in save_res:
+                logger.error(f"❌ Ошибка сохранения фото: {save_res['error'].get('error_msg')}")
+                return None
+            
+            save_data = save_res['response'][0]
+            return f"photo{save_data['owner_id']}_{save_data['id']}"
+            
     except Exception as e:
-        logger.error(f"Ошибка загрузки фото: {e}")
+        logger.error(f"Критическая ошибка загрузки фото: {e}")
         return None
 
 def fetch_russian_news():
@@ -295,7 +318,6 @@ def main():
         text, ticker = format_news_message(item)
         attach = None
         
-        # Исправленный блок генерации графика
         if ticker:
             chart_config = "{type:'line',data:{labels:['1','2','3','4','5','6'],datasets:[{data:[10,25,20,45,50,60],borderColor:'#4CAF50',fill:false}]}}"
             encoded_config = urllib.parse.quote(chart_config)
