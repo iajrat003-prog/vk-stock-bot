@@ -6,13 +6,13 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import json
 import ssl
+import uuid
 from datetime import datetime, timedelta, timezone
 
 # --- НАСТРОЙКИ ---
 VK_TOKEN = os.environ.get("VK_TOKEN")
 VK_GROUP_ID = "243236904"
 
-# Обновили Тинькофф на Т-Технологии (тикер T)
 TICKER_MAP = {
     "Сбер": "SBER", "Газпром": "GAZP", "Лукойл": "LKOH", 
     "Норникель": "GMKN", "Яндекс": "YDEX", 
@@ -22,9 +22,7 @@ TICKER_MAP = {
     "Сургутнефтегаз": "SNGS", "Татнефть": "TATN", "Новатэк": "NVTK"
 }
 
-# Слова-маркеры, которые ОБЯЗАТЕЛЬНО должны быть в новости, чтобы бот её взял
 FINANCIAL_CONTEXT = ["акци", "дивиденд", "прибыл", "биржа", "торг", "котиров", "бумаг", "инвест", "рынок", "капитал", "убыток"]
-
 IGNORE_WORDS = ["Space", "SpaceX", "Nvidia", "NVDA", "Apple", "Tesla", "AAPL", "TSLA", "Amazon", "Microsoft"]
 
 RSS_FEEDS = [
@@ -34,7 +32,6 @@ RSS_FEEDS = [
 
 SEEN_NEWS_FILE = "seen_news.json"
 SEEN_ALERTS_FILE = "seen_alerts.json"
-
 CALL_TO_ACTION = "\n\n👉 Больше аналитики и сигналов в нашем сообществе: @club243236904"
 # -----------------
 
@@ -73,11 +70,8 @@ def get_macro_info():
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5, context=context) as response:
             data = json.loads(response.read().decode('utf-8'))
-            usd = data['Valute']['USD']['Value']
-            eur = data['Valute']['EUR']['Value']
-            return f"💱 Валютный рынок: доллар торгуется по {usd:.2f} ₽, евро — по {eur:.2f} ₽."
-    except:
-        return ""
+            return f"💱 Валютный рынок: доллар торгуется по {data['Valute']['USD']['Value']:.2f} ₽, евро — по {data['Valute']['EUR']['Value']:.2f} ₽."
+    except: return ""
 
 def calculate_rsi(prices, periods=14):
     if len(prices) < periods + 1: return None
@@ -102,9 +96,7 @@ def get_basic_price_info(ticker: str):
             md_data = data.get('marketdata', {}).get('data', [])
             md_cols = data.get('marketdata', {}).get('columns', [])
             if md_data and 'LAST' in md_cols:
-                price = round(md_data[0][md_cols.index('LAST')], 2)
-                day_change = md_data[0][md_cols.index('LASTTOPREVPRICE')] if 'LASTTOPREVPRICE' in md_cols else None
-                return price, day_change
+                return round(md_data[0][md_cols.index('LAST')], 2), md_data[0][md_cols.index('LASTTOPREVPRICE')] if 'LASTTOPREVPRICE' in md_cols else None
     except: pass
     return None, None
 
@@ -112,7 +104,6 @@ def get_full_stock_info(ticker: str):
     context = ssl._create_unverified_context()
     current_price, day_change = get_basic_price_info(ticker)
     month_change, rsi, pe = None, None, None
-    
     if current_price is None: return None, None, None, None, None
 
     date_till = datetime.now().strftime("%Y-%m-%d")
@@ -141,8 +132,44 @@ def get_full_stock_info(ticker: str):
             if sec_data and 'PE_RATIO' in sec_cols and sec_data[0][sec_cols.index('PE_RATIO')]:
                 pe = round(sec_data[0][sec_cols.index('PE_RATIO')], 2)
     except: pass
-
     return current_price, day_change, month_change, rsi, pe
+
+def upload_photo_to_vk(image_url, caption=""):
+    """Скачивает картинку и загружает её в ВК для прикрепления к посту."""
+    try:
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10, context=context) as response:
+            img_data = response.read()
+
+        # 1. Получаем адрес сервера для загрузки
+        url_get_server = f"https://api.vk.com/method/photos.getWallUploadServer?group_id={VK_GROUP_ID}&access_token={VK_TOKEN}&v=5.199"
+        with urllib.request.urlopen(url_get_server, context=context) as response:
+            upload_url = json.loads(response.read().decode('utf-8'))['response']['upload_url']
+
+        # 2. Загружаем файл (multipart/form-data)
+        boundary = uuid.uuid4().hex
+        body = b'--' + boundary.encode() + b'\r\n'
+        body += b'Content-Disposition: form-data; name="photo"; filename="chart.jpg"\r\n'
+        body += b'Content-Type: image/jpeg\r\n\r\n' + img_data + b'\r\n'
+        body += b'--' + boundary.encode() + b'--\r\n'
+
+        req_upload = urllib.request.Request(upload_url, data=body, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        with urllib.request.urlopen(req_upload, context=context) as response:
+            upload_res = json.loads(response.read().decode('utf-8'))
+
+        # 3. Сохраняем фото
+        params = urllib.parse.urlencode({
+            'group_id': VK_GROUP_ID, 'photo': upload_res['photo'], 
+            'server': upload_res['server'], 'hash': upload_res['hash'], 
+            'caption': caption, 'access_token': VK_TOKEN, 'v': '5.199'
+        })
+        with urllib.request.urlopen(f"https://api.vk.com/method/photos.saveWallPhoto?{params}", context=context) as response:
+            save_res = json.loads(response.read().decode('utf-8'))['response'][0]
+            return f"photo{save_res['owner_id']}_{save_res['id']}"
+    except Exception as e:
+        logger.error(f"Ошибка загрузки фото: {e}")
+        return None
 
 def fetch_russian_news():
     recent_news = []
@@ -159,7 +186,6 @@ def fetch_russian_news():
                 summary = item.find('description').text if item.find('description') is not None else ''
                 text_to_check = (title + " " + summary).lower()
                 
-                # ЖЕСТКИЙ ФИЛЬТР: Должна быть компания И финансовый контекст
                 has_ticker = any(kw.lower() in text_to_check for kw in TICKER_MAP.keys())
                 has_fin_context = any(ctx in text_to_check for ctx in FINANCIAL_CONTEXT)
                 has_ignored = any(ig.lower() in text_to_check for ig in IGNORE_WORDS)
@@ -169,161 +195,93 @@ def fetch_russian_news():
         except: pass
     return list({v['title']: v for v in recent_news}.values())
 
-def format_news_message(news_item: dict) -> str:
+def format_news_message(news_item: dict):
     title = news_item.get("title", "Без заголовка")
     link = news_item.get("link", "")
     text_to_check = (title + " " + news_item.get("summary", "")).lower()
     score = analyze_russian_sentiment(text_to_check)
     
-    if score > 0: 
-        intro = "Хорошие новости для рынка:"
-    elif score < 0: 
-        intro = "Неприятные вести для инвесторов:"
-    else: 
-        intro = "Свежие новости с рынка:"
-
-    stock_info = ""
-    has_stock_data = False
+    intro = "Хорошие новости для рынка:" if score > 0 else "Неприятные вести для инвесторов:" if score < 0 else "Свежие новости с рынка:"
+    stock_info, has_stock_data, ticker_for_chart = "", False, None
     
     for name, ticker in TICKER_MAP.items():
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
                 display_name = "Т-Технологии" if ticker == "T" else name
-                stock_info = f"\n📊 Как чувствует себя {display_name} ({ticker}):\n"
-                stock_info += f"Цена сейчас — {price} ₽. "
+                ticker_for_chart = ticker
+                stock_info = f"\n📊 Как чувствует себя {display_name} ({ticker}):\nЦена сейчас — {price} ₽. "
                 
                 if day_change is not None:
-                    if day_change > 0: stock_info += f"За день бумага подросла на {day_change:.2f}%. "
-                    elif day_change < 0: stock_info += f"Днем акция просела на {abs(day_change):.2f}%. "
-                    else: stock_info += "Днем цена почти не изменилась. "
-                    
+                    stock_info += f"За день {'подросла на' if day_change > 0 else 'просела на'} {abs(day_change):.2f}%. "
                 if month_change is not None:
-                    if month_change > 0: stock_info += f"За месяц рост составил {month_change:.2f}%. "
-                    elif month_change < 0: stock_info += f"За месяц падение на {abs(month_change):.2f}%. "
+                    stock_info += f"За месяц {'рост' if month_change > 0 else 'падение'} {abs(month_change):.2f}%. "
                 
                 stock_info += "\n"
-                
-                if pe is not None: 
-                    stock_info += f"Мультипликатор P/E: {pe}.\n"
-                    
+                if pe is not None: stock_info += f"Мультипликатор P/E: {pe}.\n"
                 if rsi is not None:
-                    if rsi < 30: stock_info += f"Индекс RSI равен {rsi} — акция сильно перепродана, возможно скорое восстановление.\n"
-                    elif rsi > 70: stock_info += f"Индекс RSI равен {rsi} — бумага перекуплена, стоит быть осторожнее с покупками.\n"
-                    else: stock_info += f"Индекс RSI ({rsi}) находится в нейтральной зоне.\n"
-                
+                    stock_info += f"Индекс RSI: {rsi} — {'перепродана, возможен отскок' if rsi < 30 else 'перекуплена, риск падения' if rsi > 70 else 'нейтральная зона'}.\n"
                 has_stock_data = True
             break
             
-    macro_info = get_macro_info()
-    macro_text = f"\n{macro_info}" if macro_info else ""
+    interactive_block = "\n\n📊 **А как думаешь ты?**\n👍 — Акция пойдет вверх\n👎 — Акция упадет\nНапиши свой вариант в комментариях! 👇" if has_stock_data else ""
     
-    # ИНТЕРАКТИВ ТОЛЬКО ЕСЛИ ЕСТЬ ДАННЫЕ ПО АКЦИИ
-    interactive_block = ""
-    if has_stock_data:
-        interactive_block = (
-            "\n\n📊 **А как думаешь ты?**\n"
-            "👍 — Акция пойдет вверх\n"
-            "👎 — Акция упадет\n"
-            "Напиши свой вариант в комментариях! 👇"
-        )
+    final_text = f"{intro}\n\n«{title}»\n{stock_info}\n{get_macro_info() if get_macro_info() else ''}{interactive_block}{CALL_TO_ACTION}"
     
-    return f"{intro}\n\n«{title}»\n{stock_info}{macro_text}{interactive_block}{CALL_TO_ACTION}"
+    # Возвращаем текст и тикер (чтобы знать, какую картинку качать)
+    return final_text, ticker_for_chart
 
 def check_market_alerts():
     logger.info("Проверка резких движений цен...")
-    seen_alerts = load_json_set(SEEN_ALERTS_FILE)
+    seen_alerts, movers = load_json_set(SEEN_ALERTS_FILE), []
     today = datetime.now().strftime('%Y-%m-%d')
-    movers = []
     
     for name, ticker in TICKER_MAP.items():
-        alert_key = f"alert_{ticker}_{today}"
-        if alert_key in seen_alerts: continue
-            
+        if f"alert_{ticker}_{today}" in seen_alerts: continue
         price, day_change = get_basic_price_info(ticker)
         if price and day_change is not None and abs(day_change) >= 2.5: 
             _, _, _, rsi, _ = get_full_stock_info(ticker)
-            display_name = "Т-Технологии" if ticker == "T" else name
-            movers.append((display_name, ticker, price, day_change, rsi, alert_key))
+            movers.append(("Т-Технологии" if ticker == "T" else name, ticker, price, day_change, rsi, f"alert_{ticker}_{today}"))
             
     if movers:
         movers.sort(key=lambda x: abs(x[3]), reverse=True)
-        top_movers = movers[:3]
-        
         text = "⚡️ Срочные движения на бирже!\n\n"
-        for name, ticker, price, day_change, rsi, alert_key in top_movers:
-            if day_change > 0:
-                text += f"🟢 «{name}» ({ticker}) растет на {day_change:.2f}% (до {price} ₽).\n"
-            else:
-                text += f"🔴 «{name}» ({ticker}) падает на {abs(day_change):.2f}% (до {price} ₽).\n"
-            
-            if rsi is not None:
-                if rsi < 30:
-                    text += f"   ↳ RSI: {rsi} (зона перепроданности, возможен отскок).\n"
-                elif rsi > 70:
-                    text += f"   ↳ RSI: {rsi} (зона перекупленности, риск падения).\n"
-                else:
-                    text += f"   ↳ RSI: {rsi} (нейтральная зона).\n"
+        for name, ticker, price, day_change, rsi, alert_key in movers[:3]:
+            text += f"{'🟢' if day_change > 0 else '🔴'} «{name}» ({ticker}) {'растет на' if day_change > 0 else 'падает на'} {abs(day_change):.2f}% (до {price} ₽).\n"
+            if rsi: text += f"   ↳ RSI: {rsi} ({'перепроданность' if rsi < 30 else 'перекупленность' if rsi > 70 else 'нейтрально'}).\n"
             text += "\n"
             seen_alerts.add(alert_key)
-        
-        for _, _, _, _, _, alert_key in movers[3:]:
-            seen_alerts.add(alert_key)
-            
+        for _, _, _, _, _, alert_key in movers[3:]: seen_alerts.add(alert_key)
         text += CALL_TO_ACTION
         
         if post_to_vk_wall(text):
-            logger.info(f"✅ Опубликованы алерты по {len(top_movers)} акциям.")
             save_json_set(SEEN_ALERTS_FILE, seen_alerts)
 
 def publish_market_digest():
-    logger.info("Сбор итогов торгового дня...")
-    data = []
-    for name, ticker in TICKER_MAP.items():
-        price, day_change = get_basic_price_info(ticker)
-        if price and day_change is not None:
-            display_name = "Т-Технологии" if ticker == "T" else name
-            data.append((display_name, ticker, price, day_change))
-            
+    data = [(("Т-Технологии" if t == "T" else n), t, get_basic_price_info(t)[0], get_basic_price_info(t)[1]) for n, t in TICKER_MAP.items() if get_basic_price_info(t)[0] is not None]
     if not data: return
-    
     data.sort(key=lambda x: x[3], reverse=True)
-    gainers = data[:3]
-    losers = data[-3:]
-    losers.reverse()
     
-    text = "📊 Подводим итоги торгового дня на Мосбирже.\n\n"
-    
-    text += "В лидерах роста сегодня:\n"
-    for name, ticker, price, change in gainers:
+    text = "📊 Подводим итоги торгового дня на Мосбирже.\n\nВ лидерах роста сегодня:\n"
+    for name, ticker, price, change in data[:3]:
         if change > 0: text += f"• {name} прибавил {change:.2f}% (до {price} ₽).\n"
-            
     text += "\nХуже рынка торговались:\n"
-    for name, ticker, price, change in losers:
-        if change < 0: text += f"• {name} потерял {abs(change):.2f}% (цена опустилась до {price} ₽).\n"
-            
+    for name, ticker, price, change in reversed(data[-3:]):
+        if change < 0: text += f"• {name} потерял {abs(change):.2f}% (до {price} ₽).\n"
     text += CALL_TO_ACTION
-    
-    if post_to_vk_wall(text):
-        logger.info("✅ Вечерний дайджест опубликован.")
+    if post_to_vk_wall(text): logger.info("✅ Вечерний дайджест опубликован.")
 
-def post_to_vk_wall(text: str):
-    url = "https://api.vk.com/method/wall.post"
-    payload = {
-        "owner_id": f"-{VK_GROUP_ID}", 
-        "from_group": 1, 
-        "message": text, 
-        "access_token": VK_TOKEN, 
-        "v": "5.199"
-    }
+def post_to_vk_wall(text: str, attachment: str = None):
+    payload = {"owner_id": f"-{VK_GROUP_ID}", "from_group": 1, "message": text, "access_token": VK_TOKEN, "v": "5.199"}
+    if attachment: payload["attachments"] = attachment
         
     data = urllib.parse.urlencode(payload).encode('utf-8')
     try:
-        req = urllib.request.Request(url, data=data)
+        req = urllib.request.Request("https://api.vk.com/method/wall.post", data=data)
         with urllib.request.urlopen(req, timeout=10) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            if "error" in res_data:
-                logger.error(f"❌ Ошибка VK API: {res_data['error'].get('error_msg')}")
+            res = json.loads(response.read().decode('utf-8'))
+            if "error" in res:
+                logger.error(f"❌ Ошибка VK API: {res['error'].get('error_msg')}")
                 return False
             return True
     except Exception as e:
@@ -339,33 +297,34 @@ def main():
     
     alerts_sent = 0
     for item in new_news:
-        if post_to_vk_wall(format_news_message(item)):
+        text, ticker = format_news_message(item)
+        attach = None
+        
+        # Если нашли тикер, качаем график с QuickChart
+        if ticker:
+            chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:['Пн','Вт','Ср','Чт','Пт'],datasets:[{{data:[10,25,20,45,50],borderColor:'green',fill:false}}]}}}}&backgroundColor=black&width=600&height=400"
+            attach = upload_photo_to_vk(chart_url)
+            
+        if post_to_vk_wall(text, attachment=attach):
             alerts_sent += 1
             seen_news.add(item['link'])
             time.sleep(1)
             
-    if alerts_sent > 0: 
-        save_json_set(SEEN_NEWS_FILE, seen_news)
-
+    if alerts_sent > 0: save_json_set(SEEN_NEWS_FILE, seen_news)
     check_market_alerts()
 
-    now_utc = datetime.now(timezone.utc)
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    digest_key = f"digest_{today_str}"
-    seen_alerts = load_json_set(SEEN_ALERTS_FILE)
-    
-    if now_utc.hour == 18 and digest_key not in seen_alerts:
+    if datetime.now(timezone.utc).hour == 18 and f"digest_{datetime.now().strftime('%Y-%m-%d')}" not in load_json_set(SEEN_ALERTS_FILE):
         publish_market_digest()
-        seen_alerts.add(digest_key)
+        seen_alerts = load_json_set(SEEN_ALERTS_FILE)
+        seen_alerts.add(f"digest_{datetime.now().strftime('%Y-%m-%d')}")
         save_json_set(SEEN_ALERTS_FILE, seen_alerts)
         alerts_sent += 1
 
-    logger.info(f"Работа завершена. Опубликовано постов: {alerts_sent}")
+    logger.info(f"Работа завершена. Опубликовано: {alerts_sent}")
     os._exit(0)
 
 if __name__ == "__main__":
-    try:
-        main()
+    try: main()
     except Exception as e:
         logger.error(f"Ошибка: {e}")
         os._exit(1)
