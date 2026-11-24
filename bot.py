@@ -135,19 +135,16 @@ def get_full_stock_info(ticker: str):
     return current_price, day_change, month_change, rsi, pe
 
 def upload_photo_to_vk(image_url, caption=""):
-    """Скачивает картинку и загружает её в ВК для прикрепления к посту."""
     try:
         context = ssl._create_unverified_context()
         req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10, context=context) as response:
             img_data = response.read()
 
-        # 1. Получаем адрес сервера для загрузки
         url_get_server = f"https://api.vk.com/method/photos.getWallUploadServer?group_id={VK_GROUP_ID}&access_token={VK_TOKEN}&v=5.199"
         with urllib.request.urlopen(url_get_server, context=context) as response:
             upload_url = json.loads(response.read().decode('utf-8'))['response']['upload_url']
 
-        # 2. Загружаем файл (multipart/form-data)
         boundary = uuid.uuid4().hex
         body = b'--' + boundary.encode() + b'\r\n'
         body += b'Content-Disposition: form-data; name="photo"; filename="chart.jpg"\r\n'
@@ -158,7 +155,6 @@ def upload_photo_to_vk(image_url, caption=""):
         with urllib.request.urlopen(req_upload, context=context) as response:
             upload_res = json.loads(response.read().decode('utf-8'))
 
-        # 3. Сохраняем фото
         params = urllib.parse.urlencode({
             'group_id': VK_GROUP_ID, 'photo': upload_res['photo'], 
             'server': upload_res['server'], 'hash': upload_res['hash'], 
@@ -225,10 +221,9 @@ def format_news_message(news_item: dict):
             break
             
     interactive_block = "\n\n📊 **А как думаешь ты?**\n👍 — Акция пойдет вверх\n👎 — Акция упадет\nНапиши свой вариант в комментариях! 👇" if has_stock_data else ""
+    macro_info = get_macro_info()
     
-    final_text = f"{intro}\n\n«{title}»\n{stock_info}\n{get_macro_info() if get_macro_info() else ''}{interactive_block}{CALL_TO_ACTION}"
-    
-    # Возвращаем текст и тикер (чтобы знать, какую картинку качать)
+    final_text = f"{intro}\n\n«{title}»\n{stock_info}\n{macro_info if macro_info else ''}{interactive_block}{CALL_TO_ACTION}"
     return final_text, ticker_for_chart
 
 def check_market_alerts():
@@ -300,9 +295,11 @@ def main():
         text, ticker = format_news_message(item)
         attach = None
         
-        # Если нашли тикер, качаем график с QuickChart
+        # Исправленный блок генерации графика
         if ticker:
-            chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:['Пн','Вт','Ср','Чт','Пт'],datasets:[{{data:[10,25,20,45,50],borderColor:'green',fill:false}}]}}}}&backgroundColor=black&width=600&height=400"
+            chart_config = "{type:'line',data:{labels:['1','2','3','4','5','6'],datasets:[{data:[10,25,20,45,50,60],borderColor:'#4CAF50',fill:false}]}}"
+            encoded_config = urllib.parse.quote(chart_config)
+            chart_url = f"https://quickchart.io/chart?c={encoded_config}&backgroundColor=%231a1a1a&width=600&height=400"
             attach = upload_photo_to_vk(chart_url)
             
         if post_to_vk_wall(text, attachment=attach):
