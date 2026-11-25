@@ -6,7 +6,6 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import json
 import ssl
-import uuid
 from datetime import datetime, timedelta, timezone
 
 # --- НАСТРОЙКИ ---
@@ -134,62 +133,6 @@ def get_full_stock_info(ticker: str):
     except: pass
     return current_price, day_change, month_change, rsi, pe
 
-def upload_photo_to_vk(image_url, caption=""):
-    try:
-        context = ssl._create_unverified_context()
-        req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10, context=context) as response:
-            img_data = response.read()
-
-        # 1. Получаем адрес сервера для загрузки
-        url_get_server = "https://api.vk.com/method/photos.getWallUploadServer"
-        params_get = urllib.parse.urlencode({
-            'group_id': VK_GROUP_ID,
-            'access_token': VK_TOKEN,
-            'v': '5.199'
-        })
-        with urllib.request.urlopen(f"{url_get_server}?{params_get}", context=context) as response:
-            server_res = json.loads(response.read().decode('utf-8'))
-            if "error" in server_res:
-                logger.error(f"❌ Ошибка ВК (нет прав на фото?): {server_res['error'].get('error_msg')}")
-                return None
-            upload_url = server_res['response']['upload_url']
-
-        # 2. Загружаем файл
-        boundary = uuid.uuid4().hex
-        body = b'--' + boundary.encode() + b'\r\n'
-        body += b'Content-Disposition: form-data; name="photo"; filename="chart.jpg"\r\n'
-        body += b'Content-Type: image/jpeg\r\n\r\n' + img_data + b'\r\n'
-        body += b'--' + boundary.encode() + b'--\r\n'
-
-        req_upload = urllib.request.Request(upload_url, data=body, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
-        with urllib.request.urlopen(req_upload, context=context) as response:
-            upload_res = json.loads(response.read().decode('utf-8'))
-
-        # 3. Сохраняем фото
-        url_save = "https://api.vk.com/method/photos.saveWallPhoto"
-        params_save = urllib.parse.urlencode({
-            'group_id': VK_GROUP_ID, 
-            'photo': upload_res['photo'], 
-            'server': upload_res['server'], 
-            'hash': upload_res['hash'], 
-            'caption': caption, 
-            'access_token': VK_TOKEN, 
-            'v': '5.199'
-        })
-        with urllib.request.urlopen(f"{url_save}?{params_save}", context=context) as response:
-            save_res = json.loads(response.read().decode('utf-8'))
-            if "error" in save_res:
-                logger.error(f"❌ Ошибка сохранения фото: {save_res['error'].get('error_msg')}")
-                return None
-            
-            save_data = save_res['response'][0]
-            return f"photo{save_data['owner_id']}_{save_data['id']}"
-            
-    except Exception as e:
-        logger.error(f"Критическая ошибка загрузки фото: {e}")
-        return None
-
 def fetch_russian_news():
     recent_news = []
     context = ssl._create_unverified_context()
@@ -221,14 +164,13 @@ def format_news_message(news_item: dict):
     score = analyze_russian_sentiment(text_to_check)
     
     intro = "Хорошие новости для рынка:" if score > 0 else "Неприятные вести для инвесторов:" if score < 0 else "Свежие новости с рынка:"
-    stock_info, has_stock_data, ticker_for_chart = "", False, None
+    stock_info, has_stock_data = "", False
     
     for name, ticker in TICKER_MAP.items():
         if name.lower() in text_to_check:
             price, day_change, month_change, rsi, pe = get_full_stock_info(ticker)
             if price is not None:
                 display_name = "Т-Технологии" if ticker == "T" else name
-                ticker_for_chart = ticker
                 stock_info = f"\n📊 Как чувствует себя {display_name} ({ticker}):\nЦена сейчас — {price} ₽. "
                 
                 if day_change is not None:
@@ -247,7 +189,7 @@ def format_news_message(news_item: dict):
     macro_info = get_macro_info()
     
     final_text = f"{intro}\n\n«{title}»\n{stock_info}\n{macro_info if macro_info else ''}{interactive_block}{CALL_TO_ACTION}"
-    return final_text, ticker_for_chart
+    return final_text
 
 def check_market_alerts():
     logger.info("Проверка резких движений цен...")
@@ -289,10 +231,8 @@ def publish_market_digest():
     text += CALL_TO_ACTION
     if post_to_vk_wall(text): logger.info("✅ Вечерний дайджест опубликован.")
 
-def post_to_vk_wall(text: str, attachment: str = None):
+def post_to_vk_wall(text: str):
     payload = {"owner_id": f"-{VK_GROUP_ID}", "from_group": 1, "message": text, "access_token": VK_TOKEN, "v": "5.199"}
-    if attachment: payload["attachments"] = attachment
-        
     data = urllib.parse.urlencode(payload).encode('utf-8')
     try:
         req = urllib.request.Request("https://api.vk.com/method/wall.post", data=data)
@@ -315,16 +255,9 @@ def main():
     
     alerts_sent = 0
     for item in new_news:
-        text, ticker = format_news_message(item)
-        attach = None
-        
-        if ticker:
-            chart_config = "{type:'line',data:{labels:['1','2','3','4','5','6'],datasets:[{data:[10,25,20,45,50,60],borderColor:'#4CAF50',fill:false}]}}"
-            encoded_config = urllib.parse.quote(chart_config)
-            chart_url = f"https://quickchart.io/chart?c={encoded_config}&backgroundColor=%231a1a1a&width=600&height=400"
-            attach = upload_photo_to_vk(chart_url)
-            
-        if post_to_vk_wall(text, attachment=attach):
+        text = format_news_message(item)
+        # Публикуем только текст, без картинок
+        if post_to_vk_wall(text):
             alerts_sent += 1
             seen_news.add(item['link'])
             time.sleep(1)
@@ -346,4 +279,4 @@ if __name__ == "__main__":
     try: main()
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        os._exit(1)
+        os._exit(0)  # Используем os._exit, чтобы бот не зависал
